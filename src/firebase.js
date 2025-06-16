@@ -1,24 +1,29 @@
+// Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
-// Your web app's Firebase configuration
+// --- Your NEW Web App's Firebase Configuration ---
 const firebaseConfig = {
-  apiKey: "AIzaSyCupRB4xrnWy0ab6tvgqbca3wy6dDCvz6s",
-  authDomain: "gut-check-3769e.firebaseapp.com",
-  projectId: "gut-check-3769e",
-  storageBucket: "gut-check-3769e.appspot.com",
-  messagingSenderId: "779595883139",
-  appId: "1:779595883139:web:648ca63da76755673171b6"
+  apiKey: "AIzaSyAHbjMTp80cEJxDGABaHebo2mYJh14ineM",
+  authDomain: "gut-check-bbc00.firebaseapp.com",
+  projectId: "gut-check-bbc00",
+  storageBucket: "gut-check-bbc00.appspot.com",
+  messagingSenderId: "721709083515",
+  appId: "1:721709083515:web:2db2e1879ade2da078abde"
 };
 
-// Initialize Firebase
+// --- Initialize Firebase Services ---
 const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+export const auth = getAuth(app);
+export const db = getFirestore(app);
 
-// Helper for generating a safe app ID for Firestore paths
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'gut-check-default';
+// --- Export individual Firebase functions for use in other files ---
+export {
+  signInAnonymously,
+  onAuthStateChanged,
+  signInWithCustomToken
+};
 
-export { auth, db, appId, onAuthStateChanged, signInAnonymously, signInWithCustomToken };
-
+// --- Helper for generating a safe app ID for Firestore paths ---
+export const appId = typeof __app_id !== 'undefined' ? __app_id : 'gut-check-default';
