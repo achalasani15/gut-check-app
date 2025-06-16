@@ -1,23 +1,32 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { useFirebaseAuth, usePetData } from './hooks'; // We will create these hooks next
+import React, { useState, useEffect } from 'react';
+import { useFirebaseAuth, usePetData } from './hooks';
 import Loader from './components/Loader';
 import PetProfileSetup from './components/PetProfileSetup';
 import Timeline from './components/Timeline';
 import HealthDashboard from './components/HealthDashboard';
 import SettingsPage from './components/SettingsPage';
 import LogForm from './components/LogForm';
-import ConfirmationModal from './components/ConfirmationModal';
 
 export default function App() {
     const { userId, isAuthReady } = useFirebaseAuth();
-    const { pet, logs, isLoading, foodStats, handleSavePet, handleRestartJournal, handleDeletePetAndData, handleAddLog, handleUpdateLog, handleDeleteLog } = usePetData(userId);
+    const { 
+        pet, 
+        logs, 
+        isLoading, 
+        foodStats, 
+        handleSavePet, 
+        handleRestartJournal, 
+        handleDeletePetAndData, 
+        handleAddLog, 
+        handleUpdateLog, 
+        handleDeleteLog 
+    } = usePetData(userId);
 
     const [currentView, setCurrentView] = useState('timeline');
     const [logToEdit, setLogToEdit] = useState(null);
     const [isLogFormOpen, setIsLogFormOpen] = useState(false);
     const [showSuccessMessage, setShowSuccessMessage] = useState('');
     
-    // Logic for search and filter
     const [searchTerm, setSearchTerm] = useState('');
     const [activeFilter, setActiveFilter] = useState('all');
     const [filteredLogs, setFilteredLogs] = useState([]);
@@ -65,7 +74,7 @@ export default function App() {
             case 'report':
                 return <HealthDashboard allLogs={logs} foodStats={foodStats} onBack={() => setCurrentView('timeline')} />;
             case 'settings':
-                return <SettingsPage pet={pet} onBack={() => setCurrentView('timeline')} onRestartJournal={handleRestartJournal} onDeletePet={handleDeletePetAndData} />;
+                return <SettingsPage pet={pet} onBack={() => setCurrentView('timeline')} onRestartJournal={() => handleRestartJournal(triggerSuccess)} onDeletePet={() => handleDeletePetAndData(triggerSuccess)} />;
             default:
                 return (
                      <div className="animate-fade-in">
@@ -84,11 +93,9 @@ export default function App() {
                         </header>
                          <div className="mb-6 space-y-4">
                             <input type="text" placeholder="Search logs (e.g., stool, chicken...)" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full input-style" />
-                             <div className="flex space-x-2">
-                                 {/* Filter Buttons Here */}
-                             </div>
+                             {/* Filter buttons can be added here if desired in the future */}
                         </div>
-                        <Timeline logs={filteredLogs} allLogs={logs} onEdit={handleEditRequest} onDelete={handleDeleteLog} foodStats={foodStats} onOpenLogForm={handleOpenLogForm} />
+                        <Timeline logs={filteredLogs} allLogs={logs} onEdit={handleEditRequest} onDelete={(id) => handleDeleteLog(id, triggerSuccess)} foodStats={foodStats} onOpenLogForm={handleOpenLogForm} />
                     </div>
                 );
         }
@@ -107,8 +114,8 @@ export default function App() {
                         logToEdit={logToEdit} 
                         onDoneEditing={handleCloseLogForm} 
                         onCancel={handleCloseLogForm} 
-                        onLogAdded={(type) => { triggerSuccess(`${type} logged!`); handleCloseLogForm(); }}
-                        onLogUpdated={(msg) => { triggerSuccess(msg); handleCloseLogForm(); }}
+                        onLogAdded={(type) => { handleAddLog(type); triggerSuccess(`${type.type} logged!`); handleCloseLogForm(); }}
+                        onLogUpdated={(id, data) => { handleUpdateLog(id, data); triggerSuccess(`Log updated!`); handleCloseLogForm(); }}
                      />
                 </div>
             )}
@@ -121,5 +128,3 @@ export default function App() {
         </div>
     );
 }
-
-
