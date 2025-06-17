@@ -1,60 +1,53 @@
 import { useState, useEffect, useMemo } from 'react';
-import { auth, db, appId, onAuthStateChanged, signInAnonymously, signInWithCustomToken } from '../firebase';
-import { 
-    doc, 
-    collection, 
-    onSnapshot, 
-    addDoc,
-    query,
-    Timestamp,
-    deleteDoc,
-    updateDoc,
-    writeBatch,
-    getDocs
-} from 'firebase/firestore';
+import { auth, db, appId } from '../firebase';
+import { onAuthStateChanged, signInAnonymously } from 'firebase/auth';
+import { collection, onSnapshot, query } from 'firebase/firestore';
+import { getStoolInfo } from '../utils';
 
-// --- Authentication Hook ---
-export const useFirebaseAuth = () => {
-    const [userId, setUserId] = useState(null);
-    const [isAuthReady, setIsAuthReady] = useState(false);
+// --- Hook for managing user authentication state ---
+export const useAuth = () => {
+  const [userId, setUserId] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
-    useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                setUserId(user.uid);
-            } else {
-                try {
-                    const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-                    if (token) {
-                        await signInWithCustomToken(auth, token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                } catch (error) {
-                    console.error("Authentication failed:", error);
-                }
-            }
-            setIsAuthReady(true);
-        });
-        return unsubscribe;
-    }, []);
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setUserId(user.uid);
+      } else {
+        try {
+          await signInAnonymously(auth);
+        } catch (error) {
+          console.error("Anonymous auth failed:", error);
+        }
+      }
+      setIsAuthReady(true);
+    });
+    return unsubscribe;
+  }, []);
 
-    return { userId, isAuthReady };
+  return { userId, isAuthReady };
 };
 
-
-// --- Pet & Log Data Management Hook ---
-export const usePetData = (userId) => {
+// --- Hook for fetching the pet profile ---
+// THIS IS THE KEY FIX: This hook now only depends on userId. It doesn't
+// need to know about isAuthReady, which simplifies the logic and fixes the bug.
+export const usePetProfile = (userId) => {
     const [pet, setPet] = useState(null);
-    const [logs, setLogs] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
-        if (!userId) return;
+        // If there's no userId, we can't fetch a profile.
+        if (!userId) {
+            setIsLoading(false);
+            setPet(null);
+            return;
+        }
+
         const q = query(collection(db, `/artifacts/${appId}/users/${userId}/pets`));
         const unsubscribe = onSnapshot(q, (snapshot) => {
             if (!snapshot.empty) {
-                setPet({ ...snapshot.docs[0].data(), petId: snapshot.docs[0].id, userId });
+                const petData = snapshot.docs[0].data();
+                setPet({ ...petData, petId: snapshot.docs[0].id, userId });
             } else {
                 setPet(null);
             }
@@ -64,8 +57,16 @@ export const usePetData = (userId) => {
             setIsLoading(false);
         });
         return unsubscribe;
-    }, [userId]);
-    
+    }, [userId]); // The only dependency is userId.
+
+    return { pet, isLoading };
+};
+
+
+// --- Hook for fetching and managing all logs ---
+export const useLogs = (pet) => {
+    const [logs, setLogs] = useState([]);
+
     useEffect(() => {
         if (!pet) {
             setLogs([]);
@@ -80,58 +81,32 @@ export const usePetData = (userId) => {
         return unsubscribe;
     }, [pet]);
 
-    const handleSavePet = async (petData) => {
-        if (!userId) return;
-        const petCollectionPath = `/artifacts/${appId}/users/${userId}/pets`;
-        await addDoc(collection(db, petCollectionPath), { ...petData, userId, createdAt: Timestamp.now() });
-    };
+    return logs;
+};
 
-    const handleAddLog = async (logData) => {
-        if (!pet) return;
-        await addDoc(collection(db, `/artifacts/${appId}/users/${pet.userId}/logs`), logData);
-    };
+// --- Hook for calculating food statistics ---
+export const useFoodStats = (logs) => {
+    return useMemo(() => {
+        const stats = {};
+        const allFoodLogs = logs.filter(l => l.type === 'food' && !l.food.isScavenged);
+        const badStoolLogs = logs.filter(l => l.type === 'stool' && getStoolInfo(l.stool.type).isProblem);
 
-    const handleUpdateLog = async (logId, logData) => {
-        if (!pet) return;
-        await updateDoc(doc(db, `/artifacts/${appId}/users/${pet.userId}/logs/${logId}`), logData);
-    };
+        allFoodLogs.forEach(foodLog => {
+            const foodName = foodLog.food.name.toLowerCase();
+            if (!stats[foodName]) {
+                stats[foodName] = { totalCount: 0, weightedBadOutcomeCount: 0 };
+            }
+            stats[foodName].totalCount++;
 
-    const handleDeleteLog = async (logId, callback) => {
-        if (!pet || !logId) return;
-        await deleteDoc(doc(db, `/artifacts/${appId}/users/${pet.userId}/logs/${logId}`));
-        callback('Log deleted!');
-    };
-    
-    const handleRestartJournal = async (callback) => {
-        if (!pet) return;
-        const logSnapshot = await getDocs(query(collection(db, `/artifacts/${appId}/users/${pet.userId}/logs`)));
-        const batch = writeBatch(db);
-        logSnapshot.docs.forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
-        callback('Journal restarted!');
-    };
-    
-    const handleDeletePetAndData = async (callback) => {
-        if (!pet) return;
-        await handleRestartJournal(() => {}); // Clear logs first
-        const petDocRef = doc(db, `/artifacts/${appId}/users/${pet.userId}/pets/${pet.petId}`);
-        await deleteDoc(petDocRef);
-        callback('Pet profile deleted.');
-        setPet(null);
-    };
-    
-    // ... any other data logic can go here ...
-    
-    return { 
-        pet, 
-        logs, 
-        isLoading, 
-        handleSavePet, 
-        handleRestartJournal,
-        handleDeletePetAndData,
-        handleAddLog,
-        handleUpdateLog,
-        handleDeleteLog
-        // foodStats would be calculated in App.js with useMemo
-    };
+            const outcomes = badStoolLogs.filter(stoolLog =>
+                stoolLog.timestamp.toMillis() > foodLog.timestamp.toMillis() &&
+                stoolLog.timestamp.toMillis() < foodLog.timestamp.toMillis() + 86400000 // 24-hour window
+            );
+
+            if (outcomes.length > 0) {
+                stats[foodName].weightedBadOutcomeCount += outcomes.reduce((acc, stool) => acc + getStoolInfo(stool.stool.type).severity, 0);
+            }
+        });
+        return stats;
+    }, [logs]);
 };
