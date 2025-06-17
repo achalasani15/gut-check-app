@@ -1,5 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth, usePetProfile, useLogs, useFoodStats } from './hooks';
+import { db, appId } from './firebase';
+import { addDoc, collection, doc, updateDoc, deleteDoc, writeBatch, getDocs, query } from 'firebase/firestore';
+
+// Import all components
 import Loader from './components/Loader';
 import PetProfileSetup from './components/PetProfileSetup';
 import Timeline from './components/Timeline';
@@ -7,44 +11,86 @@ import SettingsPage from './components/SettingsPage';
 import HealthDashboard from './components/HealthDashboard';
 import LogForm from './components/LogForm';
 import ConfirmationModal from './components/ConfirmationModal';
-import { auth, db, appId } from './firebase'; // direct imports
-import { addDoc, collection, doc, updateDoc, deleteDoc, writeBatch, getDocs, query } from 'firebase/firestore';
 
-// This is a new helper component to keep the main logic clean.
-// It only renders AFTER authentication is ready.
-const JournalManager = ({ userId }) => {
+// This is the main component that orchestrates the entire application.
+// It's designed to be more robust and avoid the loading bugs.
+export default function App() {
+    // 1. First, handle authentication
+    const { userId, isAuthReady } = useAuth();
+    
+    // If we're still waiting for authentication to figure itself out, show the first loader.
+    if (!isAuthReady) {
+        return <Loader message="Authenticating..." />;
+    }
+
+    // If authentication is ready but we somehow don't have a user ID, show an error.
+    if (!userId) {
+        return <Loader message="Could not authenticate. Please refresh." />;
+    }
+
+    // 2. Once authenticated, we can manage the rest of the app's state.
+    // We pass the confirmed userId to a new component to handle everything else.
+    return <JournalManager userId={userId} />;
+}
+
+
+// This new component ONLY runs after we are sure we have a userId.
+// This prevents the race condition bug that was causing the app to get stuck.
+function JournalManager({ userId }) {
+    // --- State Management ---
     const { pet, isLoading: isPetLoading } = usePetProfile(userId);
     const allLogs = useLogs(pet);
     const foodStats = useFoodStats(allLogs);
     
-    // All the state management from the old App.js is moved here.
+    // UI State
+    const [currentView, setCurrentView] = useState('timeline');
     const [logToEdit, setLogToEdit] = useState(null);
+    const [isLogFormOpen, setIsLogFormOpen] = useState(false);
+    
+    // Filter & Search State
+    const [searchTerm, setSearchTerm] = useState('');
+    const [activeFilter, setActiveFilter] = useState('all');
+    const [filteredLogs, setFilteredLogs] = useState([]);
+
+    // Modals & Messages State
     const [showSuccessMessage, setShowSuccessMessage] = useState('');
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showRestartModal, setShowRestartModal] = useState(false);
     const [showDeletePetModal, setShowDeletePetModal] = useState(false);
     const [logToDelete, setLogToDelete] = useState(null);
-    const [currentView, setCurrentView] = useState('timeline');
-    const [searchTerm, setSearchTerm] = useState('');
-    const [activeFilter, setActiveFilter] = useState('all');
-    const [filteredLogs, setFilteredLogs] = useState([]);
-    const [isLogFormOpen, setIsLogFormOpen] = useState(false);
+    
+    // Navigation & Interaction State
     const [highlightedLogId, setHighlightedLogId] = useState(null);
-    const [lastLogType, setLastLogType] = useState('stool');
     const [scrollToLogId, setScrollToLogId] = useState(null);
+    const [lastLogType, setLastLogType] = useState('stool');
+    
+    // --- Logic and Effects ---
 
-    // --- Data Filtering Logic ---
-     useEffect(() => {
+    // Effect for filtering logs whenever the search term, filter, or logs change
+    useEffect(() => {
         let logsByType = allLogs;
-        if (activeFilter !== 'all') { logsByType = allLogs.filter(log => log.type === activeFilter); }
+        if (activeFilter !== 'all') {
+            logsByType = allLogs.filter(log => log.type === activeFilter);
+        }
+        
         const term = searchTerm.toLowerCase();
-        if (!term) { setFilteredLogs(logsByType); return; }
-        const results = logsByType.filter(log => (log.type.toLowerCase().includes(term) || log.food?.name?.toLowerCase().includes(term) || log.symptoms?.[0]?.toLowerCase().includes(term) || log.generalNotes?.toLowerCase().includes(term) || (log.stool?.type && `type ${log.stool.type}`.includes(term))));
+        if (!term) {
+            setFilteredLogs(logsByType);
+            return;
+        }
+
+        const results = logsByType.filter(log => 
+            (log.type.toLowerCase().includes(term)) ||
+            (log.food?.name?.toLowerCase().includes(term)) ||
+            (log.symptoms?.[0]?.toLowerCase().includes(term)) ||
+            (log.generalNotes?.toLowerCase().includes(term)) ||
+            (log.stool?.type && `type ${log.stool.type}`.includes(term))
+        );
         setFilteredLogs(results);
     }, [searchTerm, allLogs, activeFilter]);
 
-    // --- Navigation and Highlight Logic ---
-     useEffect(() => {
+    // Effect to handle scrolling to a specific log (e.g., from the report)
+    useEffect(() => {
         if (scrollToLogId && currentView === 'timeline') {
             setTimeout(() => {
                 const element = document.getElementById(`log-${scrollToLogId}`);
@@ -56,43 +102,104 @@ const JournalManager = ({ userId }) => {
                 setScrollToLogId(null);
             }, 150);
         }
-    }, [scrollToLogId, currentView, allLogs]);
+    }, [scrollToLogId, currentView]);
 
+    // --- Action Handlers ---
 
-    // --- Handlers ---
-    const triggerSuccessMessage = (message) => { setShowSuccessMessage(message); setTimeout(() => setShowSuccessMessage(''), 3000); }
-    const handleDeleteRequest = (logId) => { setLogToDelete(logId); setShowDeleteModal(true); };
-    const handleEditRequest = (log) => { setLogToEdit(log); setIsLogFormOpen(true); };
+    const triggerSuccessMessage = (message) => {
+        setShowSuccessMessage(message);
+        setTimeout(() => setShowSuccessMessage(''), 3000);
+    };
+
+    const handleDeleteRequest = (logId) => {
+        setLogToDelete(logId);
+        setShowDeleteModal(true);
+    };
+
+    const handleEditRequest = (log) => {
+        setLogToEdit(log);
+        setIsLogFormOpen(true);
+    };
+
+    const openLogForm = () => {
+        setLogToEdit(null);
+        setIsLogFormOpen(true);
+    };
+
+    const closeLogForm = () => {
+        setIsLogFormOpen(false);
+        setLogToEdit(null);
+    };
+
+    const handleViewLog = (logId) => {
+        setCurrentView('timeline');
+        setScrollToLogId(logId);
+    };
+
+    // --- Database Actions ---
+
     const confirmDelete = async () => {
         if (!pet || !logToDelete) return;
-        try { await deleteDoc(doc(db, `/artifacts/${appId}/users/${pet.userId}/logs/${logToDelete}`)); triggerSuccessMessage('Log deleted!'); } catch (error) { console.error("Error deleting log:", error); }
-        finally { setShowDeleteModal(false); setLogToDelete(null); }
+        try {
+            await deleteDoc(doc(db, `/artifacts/${appId}/users/${pet.userId}/logs/${logToDelete}`));
+            triggerSuccessMessage('Log deleted!');
+        } catch (error) {
+            console.error("Error deleting log:", error);
+        } finally {
+            setShowDeleteModal(false);
+            setLogToDelete(null);
+        }
     };
+
     const handleRestartJournal = async () => {
         if (!pet) return;
-        const logSnapshot = await getDocs(query(collection(db, `/artifacts/${appId}/users/${pet.userId}/logs`)));
-        const batch = writeBatch(db); logSnapshot.docs.forEach(doc => batch.delete(doc.ref));
-        try { await batch.commit(); triggerSuccessMessage('Journal restarted!'); setShowRestartModal(false); } 
-        catch (error) { console.error("Error restarting journal:", error); }
+        const logCollectionRef = collection(db, `/artifacts/${appId}/users/${pet.userId}/logs`);
+        const logSnapshot = await getDocs(query(logCollectionRef));
+        const batch = writeBatch(db);
+        logSnapshot.docs.forEach(doc => batch.delete(doc.ref));
+        try {
+            await batch.commit();
+            triggerSuccessMessage('Journal restarted!');
+        } catch (error) {
+            console.error("Error restarting journal:", error);
+        } finally {
+            setShowRestartModal(false);
+        }
     };
+    
     const handleDeletePetAndData = async () => {
         if (!pet) return;
-        const logSnapshot = await getDocs(query(collection(db, `/artifacts/${appId}/users/${pet.userId}/logs`)));
-        const batch = writeBatch(db); logSnapshot.docs.forEach(logDoc => batch.delete(logDoc.ref));
+        // First delete all logs
+        const logCollectionRef = collection(db, `/artifacts/${appId}/users/${pet.userId}/logs`);
+        const logSnapshot = await getDocs(query(logCollectionRef));
+        const logBatch = writeBatch(db);
+        logSnapshot.docs.forEach(logDoc => logBatch.delete(logDoc.ref));
+        await logBatch.commit();
+
+        // Then delete the pet
         const petDocRef = doc(db, `/artifacts/${appId}/users/${pet.userId}/pets/${pet.petId}`);
-        batch.delete(petDocRef);
-        try { await batch.commit(); triggerSuccessMessage('Pet profile deleted.'); setCurrentView('timeline'); setShowDeletePetModal(false); }
-        catch (error) { console.error("Error deleting pet and data:", error); }
+        await deleteDoc(petDocRef);
+
+        triggerSuccessMessage('Pet profile deleted.');
+        setCurrentView('timeline');
+        setShowDeletePetModal(false);
     };
-    const openLogForm = () => { setLogToEdit(null); setIsLogFormOpen(true); }
-    const closeLogForm = () => { setIsLogFormOpen(false); setLogToEdit(null); };
-    const handleViewLog = (logId) => { setCurrentView('timeline'); setScrollToLogId(logId); };
-    const getFilterButtonClass = (filterType) => `px-4 py-2 rounded-full text-sm font-semibold transition-colors ${activeFilter === filterType ? 'bg-emerald-600 text-white shadow' : 'bg-white text-zinc-700 hover:bg-zinc-100'}`;
     
     // --- Render Logic ---
-    if (isPetLoading) return <Loader message="Fetching your journal..." />;
-    if (!pet) return <PetProfileSetup userId={userId} />;
 
+    // If we have a userId but are still waiting for the pet profile to load
+    if (isPetLoading) {
+        return <Loader message="Fetching your journal..." />;
+    }
+
+    // If loading is done and there's still no pet, show the setup screen
+    if (!pet) {
+        return <PetProfileSetup userId={userId} />;
+    }
+    
+    const getFilterButtonClass = (filterType) => `px-4 py-2 rounded-full text-sm font-semibold transition-colors ${activeFilter === filterType ? 'bg-emerald-600 text-white shadow' : 'bg-white text-zinc-700 hover:bg-zinc-100'}`;
+
+    // Main render for the app once everything is loaded
     return (
         <div className="bg-zinc-50 min-h-screen font-sans text-zinc-800">
             <main className="max-w-2xl mx-auto p-4">
@@ -125,7 +232,7 @@ const JournalManager = ({ userId }) => {
                     </div>
                 )}
                 {currentView === 'settings' && (<SettingsPage pet={pet} onBack={() => setCurrentView('timeline')} onRestart={() => setShowRestartModal(true)} onDeletePet={() => setShowDeletePetModal(true)} />)}
-                {currentView === 'report' && (<HealthDashboard allLogs={allLogs} foodStats={foodStats} onBack={() => setCurrentView('timeline')} onViewLog={handleViewLog}/>)}
+                {currentView === 'report' && (<HealthDashboard allLogs={allLogs} foodStats={foodStats} onBack={() => setCurrentView('timeline')} onViewLog={handleViewLog} />)}
             </main>
             
             {currentView === 'timeline' && (
@@ -148,17 +255,3 @@ const JournalManager = ({ userId }) => {
     );
 }
 
-
-export default function App() {
-    const { userId, isAuthReady } = useAuth();
-
-    // The initial loading logic is now much simpler.
-    // It only waits for the authentication process to complete.
-    if (!isAuthReady) {
-        return <Loader message="Authenticating..." />;
-    }
-
-    // After auth is ready, we hand off to the main manager component.
-    // This component will then handle loading the specific pet profile.
-    return <JournalManager userId={userId} />;
-}
